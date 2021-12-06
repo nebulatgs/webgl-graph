@@ -12,14 +12,14 @@ const fs = `#version 300 es
     uniform vec4 u_FragColor;
     out vec4 outColor;
     void main() {
-        float x = gl_FragCoord.x;
-        float y = gl_FragCoord.y;
-        float fnVal = (pow((x - 100.) / 10., 3.0)) + 100.0;
-        float val1 = (y - fnVal) / 10.;
-        float val2 = (fnVal - y) / 10.;
-        float val = (val1 + 1. > 1.0 && val1 - 1. < 1.0) ? 1.0 : 0.0;
+        float x = gl_FragCoord.x - 1920.0 / 2.0;
+        float y = gl_FragCoord.y - 1080.0 / 2.0;
+        // float fnVal =cos(10. * (pow(x,2.)+pow(y,2.)))/1.;
+        // float fn2 = sin(x / 50.0) / 0.008;
+        float fn2 = abs(x / 50.) / 0.008;
+        float fnVal = cosh(fn2 /  y / .5) / 1000.;
         
-        outColor = vec4(val, val, val, 1.0);
+        outColor = vec4(fnVal, fnVal, fnVal, 1.0);
 
     }
 `
