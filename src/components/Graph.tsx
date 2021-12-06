@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 const vs = `#version 300 es
-    precision mediump float;
+    precision highp float;
     layout (location = 0) in vec3 a_Position;
     void main()
     {
@@ -10,14 +10,17 @@ const vs = `#version 300 es
 const fs = `#version 300 es
     precision highp float;
     uniform vec4 u_FragColor;
+    uniform float time;
     out vec4 outColor;
     void main() {
         float x = gl_FragCoord.x - 1920.0 / 2.0;
+        x /= 50.0;
         float y = gl_FragCoord.y - 1080.0 / 2.0;
         // float fnVal =cos(10. * (pow(x,2.)+pow(y,2.)))/1.;
-        // float fn2 = sin(x / 50.0) / 0.008;
-        float fn2 = abs(x / 50.) / 0.008;
-        float fnVal = cosh(fn2 /  y / .5) / 1000.;
+        // float fn2 = sin(x) / 0.008;
+        // float sinTime = cos(time / 30.);
+        float fn2 = sin(x + time / 10.) / 0.008;
+        float fnVal = cosh(fn2 -  y / .5) / 1000.;
         
         outColor = vec4(fnVal, fnVal, fnVal, 1.0);
 
@@ -128,7 +131,17 @@ export default function Graph() {
         gl.clear(gl.COLOR_BUFFER_BIT);
 
         // Draw
-        gl.drawArrays(gl.TRIANGLES, 0, n);
+        const draw = (gl: WebGL2RenderingContext, num: number) => {
+            const time = gl.getUniformLocation(program, 'time');
+            if (time < 0) {
+                console.log('Failed to get the storage location of time');
+                return -1;
+            }
+            gl.uniform1f(time, num);
+            gl.drawArrays(gl.TRIANGLES, 0, n);
+            requestAnimationFrame(() => draw(gl, num + 1));
+        }
+        requestAnimationFrame(() => draw(gl, 0));
     }, []);
     return (
         <main className="w-full h-full bg-blue-200 text-xl grid place-items-center">
