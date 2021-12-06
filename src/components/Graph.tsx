@@ -19,7 +19,7 @@ const fs = `#version 300 es
         // float fnVal =cos(10. * (pow(x,2.)+pow(y,2.)))/1.;
         // float fn2 = sin(x) / 0.008;
         // float sinTime = cos(time / 30.);
-        float fn2 = sin(x + time / 10.) / 0.008;
+        float fn2 = (sin(x) + sin(x + time / 10.)) / 0.008;
         float fnVal = cosh(fn2 -  y / .5) / 1000.;
         
         outColor = vec4(fnVal, fnVal, fnVal, 1.0);
