@@ -1,0 +1,16 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+
+/* Your own custom component styles */
+
+@import 'tailwindcss/utilities';
+
+/* remove body and html padding and margin */
+html, body {
+  padding: 0;
+  margin: 0;
+  height: 100vh;
+}
+#__next {
+  height: 100%;
+}
