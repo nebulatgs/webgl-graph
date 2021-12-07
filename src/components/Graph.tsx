@@ -1,4 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { parse, ConstantNode, config, create, all, SymbolNode, FunctionNode } from 'mathjs';
+import { useRecoilState, useRecoilValue } from "recoil";
+import { equationAtom } from "../atoms/equation";
+import { Uniform } from "../interfaces/uniform";
+import { uniformsAtom } from "../atoms/uniforms";
+const width = 1920;
+const height = 1080;
 const vs = `#version 300 es
     precision highp float;
     layout (location = 0) in vec3 a_Position;
@@ -7,20 +14,59 @@ const vs = `#version 300 es
        gl_Position = vec4(a_Position, 1.0f);
     } 
 `
-const fs = `#version 300 es
+const fsCartesian = `#version 300 es
     precision highp float;
     uniform vec4 u_FragColor;
     uniform float time;
+
+    #{{uniforms}}
+
+    out vec4 outColor;
+
+    float aastep(float threshold, float value) {
+        float afwidth = 0.7 * length(vec2(dFdx(value), dFdy(value)));
+        return smoothstep(threshold-afwidth, threshold+afwidth, value);
+    }
+      
+    void main() {
+        float x = gl_FragCoord.x - ${width.toFixed(1)} / 2.0;
+        x /= 50.0;
+        float y = gl_FragCoord.y - ${height.toFixed(1)} / 2.0;
+        y /= 50.0;
+        float sinTime = sin(time / 30.);
+
+        float fn2 = (#{{equation}});
+        float fnVal = aastep(0.2, pow(fn2 - y, 1.0));
+        
+        outColor = vec4(fnVal, fnVal, fnVal, 1.0);
+        // outColor = vec4(x, y, 1.0, 1.0);
+    }
+`
+const fsPolar = `#version 300 es
+    precision highp float;
+    uniform vec4 u_FragColor;
+    uniform float time;
+
+    #{{uniforms}}
+
     out vec4 outColor;
     void main() {
-        float x = gl_FragCoord.x - 1920.0 / 2.0;
-        x /= 50.0;
-        float y = gl_FragCoord.y - 1080.0 / 2.0;
+        float x = gl_FragCoord.x - ${width.toFixed(1)} / 2.0;
+        // x /= 50.0;
+        float y = gl_FragCoord.y - ${height.toFixed(1)} / 2.0;
+        // y /= 50.0;
+        float sinTime = sin(time / 30.);
+
+
+        float r = sqrt(pow(x, 2.0) + pow(y, 2.0));
+        // float theta = atan(abs(y), x);
+        float theta = mod(atan(y,x) , 2.0 * 3.141592);
+
         // float fnVal =cos(10. * (pow(x,2.)+pow(y,2.)))/1.;
         // float fn2 = sin(x) / 0.008;
-        // float sinTime = cos(time / 30.);
-        float fn2 = (sin(x) + sin(x + time / 10.)) / 0.008;
-        float fnVal = cosh(fn2 -  y / .5) / 1000.;
+        // float fn2 = (sin(x) + sin(x + time / 10.)) / 0.008;
+        float fn2 = theta / 0.008;
+        float fnVal = cosh(fn2 - r / .5) / 1000.;
         
         outColor = vec4(fnVal, fnVal, fnVal, 1.0);
 
@@ -81,7 +127,7 @@ function initShaders(gl: WebGL2RenderingContext, vs_source: string, fs_source: s
     gl.attachShader(glProgram, fragmentShader);
     gl.linkProgram(glProgram);
     if (!gl.getProgramParameter(glProgram, gl.LINK_STATUS)) {
-        alert("Unable to initialize the shader program");
+        console.log("Unable to initialize the shader program");
         return false;
     }
 
@@ -96,56 +142,110 @@ function makeShader(gl: WebGL2RenderingContext, src: string, type: number) {
     gl.shaderSource(shader, src);
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        alert("Error compiling shader: " + gl.getShaderInfoLog(shader));
+        console.log("Error compiling shader: " + gl.getShaderInfoLog(shader));
         return;
     }
     return shader;
 }
 
+
+function populateUniforms(gl: WebGL2RenderingContext, program: WebGLProgram, uniforms: Uniform[]) {
+    uniforms.forEach(u => {
+        const shaderU = gl.getUniformLocation(program, u.name);
+        const f = parseFloat(u.value);
+        gl.uniform1f(shaderU, isNaN(f) ? 0 : f);
+    })
+    return 0;
+}
+function generateShader(shader: string, uniforms: Uniform[], equation: string) {
+    shader = shader.replace(/#{{equation}}/g, equation);
+    shader = shader.replace(/#{{uniforms}}/g, uniforms.map(u => `uniform float ${u.name};`).join(''))
+    return shader;
+}
+
 export default function Graph() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const rawEquation = useRecoilValue(equationAtom);
+    const [rawUniforms, setRawUniforms] = useRecoilState(uniformsAtom);
     useEffect(() => {
-        const canvas = canvasRef.current;
-        const gl = canvas.getContext("webgl2");
-        if (!gl) {
-            console.log("Failed to get the rendering context for WebGL");
-            return;
-        }
-
-        // Init shaders
-        const program = initShaders(gl, vs, fs);
-        if (!program) {
-            console.log('Failed to intialize shaders.');
-            return;
-        }
-
-        // Write the positions of vertices to a vertex shader
-        const n = initVertexBuffers(gl, program);
-        if (n < 0) {
-            console.log('Failed to set the positions of the vertices');
-            return;
-        }
-
-        // Clear canvas
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-
-        // Draw
-        const draw = (gl: WebGL2RenderingContext, num: number) => {
-            const time = gl.getUniformLocation(program, 'time');
-            if (time < 0) {
-                console.log('Failed to get the storage location of time');
-                return -1;
+        let cancelDraw = false;
+        try {
+            const canvas = canvasRef.current;
+            const gl = canvas.getContext("webgl2");
+            if (!gl) {
+                console.log("Failed to get the rendering context for WebGL");
+                return;
             }
-            gl.uniform1f(time, num);
-            gl.drawArrays(gl.TRIANGLES, 0, n);
-            requestAnimationFrame(() => draw(gl, num + 1));
+
+            // Init shaders
+            const uniforms: Uniform[] = [];
+            const fns: string[] = [];
+            const mathjs = create(all);
+            const eq = mathjs.parse(rawEquation);
+            eq.traverse((n, _, _p) => {
+                if (n.type === "FunctionNode") {
+                    const f = (n as FunctionNode);
+                    fns.push(f.fn.name);
+                    return;
+                }
+                if (n.type === "SymbolNode") {
+                    console.log(n);
+                    const s = (n as SymbolNode);
+                    if (!(s.name === "x" || s.name === "time" || s.name === 'pi' || uniforms.includes({ name: s.name, value: "0" }) || fns.includes(s.name))) {
+                        uniforms.push({ name: s.name, value: rawUniforms.find(u => u.name === s.name)?.value ?? "0" });
+                    }
+                }
+            })
+            console.log(uniforms, fns);
+            if (JSON.stringify(uniforms) !== JSON.stringify(rawUniforms)) {
+                setRawUniforms(uniforms);
+            }
+            const equation = mathjs.format(mathjs.simplify(eq, ['n1^n2 -> pow(n1,n2)', `pi -> ${Math.PI}`]), { notation: "fixed", precision: 10 });
+            const fs = generateShader(fsCartesian, uniforms, equation);
+            const program = initShaders(gl, vs, fs);
+
+            if (!program) {
+                console.log('Failed to intialize shaders.');
+                return;
+            }
+            populateUniforms(gl, program, uniforms);
+
+
+            // Write the positions of vertices to a vertex shader
+            const n = initVertexBuffers(gl, program);
+            if (n < 0) {
+                console.log('Failed to set the positions of the vertices');
+                return;
+            }
+
+            // Clear canvas
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            // Draw
+            const draw = (gl: WebGL2RenderingContext, num: number) => {
+                const time = gl.getUniformLocation(program, 'time');
+                if (time < 0) {
+                    console.log('Failed to get the storage location of time');
+                    return -1;
+                }
+                gl.uniform1f(time, num);
+                populateUniforms(gl, program, rawUniforms);
+                gl.drawArrays(gl.TRIANGLES, 0, n);
+                if (!cancelDraw) {
+                    requestAnimationFrame(() => draw(gl, num + 1));
+                }
+            }
+            requestAnimationFrame(() => draw(gl, 0));
+        } catch (e) {
+            console.log(e);
+            return;
         }
-        requestAnimationFrame(() => draw(gl, 0));
-    }, []);
+        return () => { cancelDraw = true; }
+    }, [rawEquation, rawUniforms]);
     return (
         <main className="w-full h-full bg-blue-200 text-xl grid place-items-center">
-            <canvas ref={canvasRef} className="w-full h-full" width={1920} height={1080} />
+            <canvas ref={canvasRef} className="w-full h-full" width={width} height={height} />
         </main>
     );
 }
