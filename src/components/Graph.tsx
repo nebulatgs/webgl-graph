@@ -4,7 +4,7 @@ import { useRecoilState, useRecoilValue } from "recoil";
 import { equationAtom } from "../atoms/equation";
 import { Uniform } from "../interfaces/uniform";
 import { uniformsAtom } from "../atoms/uniforms";
-import { symbolAtom } from "../atoms/symbol";
+import { settingsAtom } from "../atoms/settings";
 const width = 1920;
 const height = 1080;
 const vs = `#version 300 es
@@ -37,7 +37,7 @@ const fsCartesian = `#version 300 es
         float sinTime = sin(time / 30.);
 
         float fn2 = (#{{equation}});
-        float fnVal = aastep(0.1, pow(fn2 #{{symbol}} y, 2.0));
+        float fnVal = aastep(0.02, pow(fn2 #{{symbol}} y, 2.0));
         
         outColor = vec4(fnVal, fnVal, fnVal, 1.0);
         // outColor = vec4(x, y, 1.0, 1.0);
@@ -51,23 +51,25 @@ const fsPolar = `#version 300 es
     #{{uniforms}}
 
     out vec4 outColor;
+
+    float aastep(float threshold, float value) {
+        float afwidth = 0.7 * length(vec2(dFdx(value), dFdy(value)));
+        return smoothstep(threshold-afwidth, threshold+afwidth, value);
+    }
+    
     void main() {
         float x = gl_FragCoord.x - ${width.toFixed(1)} / 2.0;
-        // x /= 50.0;
+        x /= 50.0;
         float y = gl_FragCoord.y - ${height.toFixed(1)} / 2.0;
-        // y /= 50.0;
+        y /= 50.0;
         float sinTime = sin(time / 30.);
 
 
         float r = sqrt(pow(x, 2.0) + pow(y, 2.0));
-        // float theta = atan(abs(y), x);
         float theta = mod(atan(y,x) , 2.0 * 3.141592);
 
-        // float fnVal =cos(10. * (pow(x,2.)+pow(y,2.)))/1.;
-        // float fn2 = sin(x) / 0.008;
-        // float fn2 = (sin(x) + sin(x + time / 10.)) / 0.008;
-        float fn2 = theta / 0.008;
-        float fnVal = cosh(fn2 - r / .5) / 1000.;
+        float fn2 = (#{{equation}});
+        float fnVal = aastep(0.02, pow(fn2 #{{symbol}} r, 2.0));
         
         outColor = vec4(fnVal, fnVal, fnVal, 1.0);
 
@@ -173,7 +175,7 @@ function generateShader(shader: string, uniforms: Uniform[], equation: string, s
 export default function Graph() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rawEquation = useRecoilValue(equationAtom);
-    const symbol = useRecoilValue(symbolAtom);
+    const settings = useRecoilValue(settingsAtom);
     const [rawUniforms, setRawUniforms] = useRecoilState(uniformsAtom);
     useEffect(() => {
         let cancelDraw = false;
@@ -187,6 +189,16 @@ export default function Graph() {
 
             // Init shaders
             const uniforms: Uniform[] = [];
+            const reserved = [
+                'pi',
+                'time',
+                'width',
+                'height',
+                'x',
+                'y',
+                'r',
+                'theta'
+            ]
             const fns: string[] = [];
             const mathjs = create(all);
             const eq = mathjs.parse(rawEquation);
@@ -199,7 +211,7 @@ export default function Graph() {
                 if (n.type === "SymbolNode") {
                     console.log(n);
                     const s = (n as SymbolNode);
-                    if (!(s.name === "x" || s.name === "y" || s.name === "time" || s.name === 'pi' || uniforms.includes({ name: s.name, value: "0" }) || fns.includes(s.name))) {
+                    if (!(reserved.includes(s.name) || uniforms.includes({ name: s.name, value: "0" }) || fns.includes(s.name))) {
                         uniforms.push({ name: s.name, value: rawUniforms.find(u => u.name === s.name)?.value ?? "0" });
                     }
                 }
@@ -209,7 +221,7 @@ export default function Graph() {
                 setRawUniforms(uniforms);
             }
             const equation = mathjs.format(mathjs.simplify(eq, ['n1^n2 -> pow(n1,n2)', `pi -> ${Math.PI}`]), { notation: "fixed", precision: 10 });
-            const fs = generateShader(fsCartesian, uniforms, equation, symbol);
+            const fs = generateShader(settings.system === 'cartesian' ? fsCartesian : fsPolar, uniforms, equation, settings.symbol);
             const program = initShaders(gl, vs, fs);
 
             if (!program) {
@@ -250,7 +262,7 @@ export default function Graph() {
             return;
         }
         return () => { cancelDraw = true; }
-    }, [rawEquation, rawUniforms, symbol]);
+    }, [rawEquation, rawUniforms, settings]);
     return (
         <main className="w-full h-full bg-blue-200 text-xl grid place-items-center">
             <canvas ref={canvasRef} className="w-full h-full" width={width} height={height} />
