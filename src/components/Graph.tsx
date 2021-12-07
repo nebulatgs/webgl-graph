@@ -35,6 +35,9 @@ const fsCartesian = `#version 300 es
         float y = gl_FragCoord.y - ${height.toFixed(1)} / 2.0;
         y /= 50.0;
         float sinTime = sin(time / 30.);
+        
+        float r = sqrt(pow(x, 2.0) + pow(y, 2.0));
+        float theta = mod(atan(y,x) , 2.0 * 3.141592);
 
         float fn2 = (#{{equation}});
         float fnVal = aastep(0.02, pow(fn2 #{{symbol}} y, 2.0));
@@ -63,7 +66,6 @@ const fsPolar = `#version 300 es
         float y = gl_FragCoord.y - ${height.toFixed(1)} / 2.0;
         y /= 50.0;
         float sinTime = sin(time / 30.);
-
 
         float r = sqrt(pow(x, 2.0) + pow(y, 2.0));
         float theta = mod(atan(y,x) , 2.0 * 3.141592);
