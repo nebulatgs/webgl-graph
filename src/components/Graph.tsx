@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { parse, ConstantNode, config, create, all, SymbolNode, FunctionNode } from 'mathjs';
+import { parse, ConstantNode, config, create, all, SymbolNode, FunctionNode, evaluate, unit } from 'mathjs';
 import { useRecoilState, useRecoilValue } from "recoil";
 import { equationAtom } from "../atoms/equation";
 import { Uniform } from "../interfaces/uniform";
 import { uniformsAtom } from "../atoms/uniforms";
+import { symbolAtom } from "../atoms/symbol";
 const width = 1920;
 const height = 1080;
 const vs = `#version 300 es
@@ -36,7 +37,7 @@ const fsCartesian = `#version 300 es
         float sinTime = sin(time / 30.);
 
         float fn2 = (#{{equation}});
-        float fnVal = aastep(0.2, pow(fn2 - y, 1.0));
+        float fnVal = aastep(0.1, pow(fn2 #{{symbol}} y, 2.0));
         
         outColor = vec4(fnVal, fnVal, fnVal, 1.0);
         // outColor = vec4(x, y, 1.0, 1.0);
@@ -152,13 +153,19 @@ function makeShader(gl: WebGL2RenderingContext, src: string, type: number) {
 function populateUniforms(gl: WebGL2RenderingContext, program: WebGLProgram, uniforms: Uniform[]) {
     uniforms.forEach(u => {
         const shaderU = gl.getUniformLocation(program, u.name);
-        const f = parseFloat(u.value);
+        const e = evaluate(u.value, {
+            pi: Math.PI,
+            // all uniform names to values
+            ...uniforms.reduce((acc, curr) => ({ ...acc, [curr.name]: curr.value }), {})
+        });
+        const f = parseFloat(e);
         gl.uniform1f(shaderU, isNaN(f) ? 0 : f);
     })
     return 0;
 }
-function generateShader(shader: string, uniforms: Uniform[], equation: string) {
+function generateShader(shader: string, uniforms: Uniform[], equation: string, symbol: string) {
     shader = shader.replace(/#{{equation}}/g, equation);
+    shader = shader.replace(/#{{symbol}}/g, symbol);
     shader = shader.replace(/#{{uniforms}}/g, uniforms.map(u => `uniform float ${u.name};`).join(''))
     return shader;
 }
@@ -166,6 +173,7 @@ function generateShader(shader: string, uniforms: Uniform[], equation: string) {
 export default function Graph() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rawEquation = useRecoilValue(equationAtom);
+    const symbol = useRecoilValue(symbolAtom);
     const [rawUniforms, setRawUniforms] = useRecoilState(uniformsAtom);
     useEffect(() => {
         let cancelDraw = false;
@@ -191,7 +199,7 @@ export default function Graph() {
                 if (n.type === "SymbolNode") {
                     console.log(n);
                     const s = (n as SymbolNode);
-                    if (!(s.name === "x" || s.name === "time" || s.name === 'pi' || uniforms.includes({ name: s.name, value: "0" }) || fns.includes(s.name))) {
+                    if (!(s.name === "x" || s.name === "y" || s.name === "time" || s.name === 'pi' || uniforms.includes({ name: s.name, value: "0" }) || fns.includes(s.name))) {
                         uniforms.push({ name: s.name, value: rawUniforms.find(u => u.name === s.name)?.value ?? "0" });
                     }
                 }
@@ -201,7 +209,7 @@ export default function Graph() {
                 setRawUniforms(uniforms);
             }
             const equation = mathjs.format(mathjs.simplify(eq, ['n1^n2 -> pow(n1,n2)', `pi -> ${Math.PI}`]), { notation: "fixed", precision: 10 });
-            const fs = generateShader(fsCartesian, uniforms, equation);
+            const fs = generateShader(fsCartesian, uniforms, equation, symbol);
             const program = initShaders(gl, vs, fs);
 
             if (!program) {
@@ -242,7 +250,7 @@ export default function Graph() {
             return;
         }
         return () => { cancelDraw = true; }
-    }, [rawEquation, rawUniforms]);
+    }, [rawEquation, rawUniforms, symbol]);
     return (
         <main className="w-full h-full bg-blue-200 text-xl grid place-items-center">
             <canvas ref={canvasRef} className="w-full h-full" width={width} height={height} />
