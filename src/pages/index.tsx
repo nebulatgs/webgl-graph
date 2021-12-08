@@ -1,3 +1,5 @@
+import { useRecoilValue } from "recoil";
+import { equationAtom } from "../atoms/equation";
 import Graph from "../components/Graph";
 import Header from "../components/Header";
 import Sidebar from "../components/Sidebar";

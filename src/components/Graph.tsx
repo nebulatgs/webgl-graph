@@ -15,7 +15,7 @@ const vs = `#version 300 es
        gl_Position = vec4(a_Position, 1.0f);
     } 
 `
-const fsCartesian = `#version 300 es
+const rawFs = `#version 300 es
     precision highp float;
     uniform vec4 u_FragColor;
     uniform float time;
@@ -39,44 +39,49 @@ const fsCartesian = `#version 300 es
         float r = sqrt(pow(x, 2.0) + pow(y, 2.0));
         float theta = mod(atan(y,x) , 2.0 * 3.141592);
 
-        float fn2 = (#{{equation}});
-        float fnVal = aastep(0.02, pow(fn2 #{{symbol}} y, 2.0));
+        #{{equations}}
+
+        // float fnVal = aastep(0.02, pow(fn2 #{{symbol}} y, 2.0));
+        // float fnVal2 = aastep(0.02, pow(x #{{symbol}} y, 2.0));
+
+        #{{fnVals}}
         
-        outColor = vec4(fnVal, fnVal, fnVal, 1.0);
+        outColor = vec4(#{{finals}}, #{{finals}}, #{{finals}}, 1.0);
         // outColor = vec4(x, y, 1.0, 1.0);
     }
 `
-const fsPolar = `#version 300 es
-    precision highp float;
-    uniform vec4 u_FragColor;
-    uniform float time;
+// const fsPolar = `#version 300 es
+//     precision highp float;
+//     uniform vec4 u_FragColor;
+//     uniform float time;
 
-    #{{uniforms}}
+//     #{{uniforms}}
 
-    out vec4 outColor;
+//     out vec4 outColor;
 
-    float aastep(float threshold, float value) {
-        float afwidth = 0.7 * length(vec2(dFdx(value), dFdy(value)));
-        return smoothstep(threshold-afwidth, threshold+afwidth, value);
-    }
-    
-    void main() {
-        float x = gl_FragCoord.x - ${width.toFixed(1)} / 2.0;
-        x /= 50.0;
-        float y = gl_FragCoord.y - ${height.toFixed(1)} / 2.0;
-        y /= 50.0;
-        float sinTime = sin(time / 30.);
+//     float aastep(float threshold, float value) {
+//         float afwidth = 0.7 * length(vec2(dFdx(value), dFdy(value)));
+//         return smoothstep(threshold-afwidth, threshold+afwidth, value);
+//     }
 
-        float r = sqrt(pow(x, 2.0) + pow(y, 2.0));
-        float theta = mod(atan(y,x) , 2.0 * 3.141592);
+//     void main() {
+//         float x = gl_FragCoord.x - ${width.toFixed(1)} / 2.0;
+//         x /= 50.0;
+//         float y = gl_FragCoord.y - ${height.toFixed(1)} / 2.0;
+//         y /= 50.0;
+//         float sinTime = sin(time / 30.);
 
-        float fn2 = (#{{equation}});
-        float fnVal = aastep(0.02, pow(fn2 #{{symbol}} r, 2.0));
-        
-        outColor = vec4(fnVal, fnVal, fnVal, 1.0);
+//         float r = sqrt(pow(x, 2.0) + pow(y, 2.0));
+//         float theta = mod(atan(y,x) , 2.0 * 3.141592);
 
-    }
-`
+//         #{{equations}}
+
+//         #{{fnVals}}
+
+//         outColor = vec4(#{{finals}}, #{{finals}}, #{{finals}}, 1.0);
+
+//     }
+// `
 
 function initVertexBuffers(gl: WebGL2RenderingContext, program: WebGLProgram) {
     // Vertices
@@ -154,29 +159,32 @@ function makeShader(gl: WebGL2RenderingContext, src: string, type: number) {
 }
 
 
-function populateUniforms(gl: WebGL2RenderingContext, program: WebGLProgram, uniforms: Uniform[]) {
-    uniforms.forEach(u => {
-        const shaderU = gl.getUniformLocation(program, u.name);
-        const e = evaluate(u.value, {
+function populateUniforms(gl: WebGL2RenderingContext, program: WebGLProgram, uniforms: Map<string, string>) {
+    uniforms.forEach((v, k) => {
+        const shaderU = gl.getUniformLocation(program, k);
+        const reduced = [...uniforms].reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {})
+        const e = evaluate(v, {
             pi: Math.PI,
             // all uniform names to values
-            ...uniforms.reduce((acc, curr) => ({ ...acc, [curr.name]: curr.value }), {})
+            ...reduced
         });
         const f = parseFloat(e);
         gl.uniform1f(shaderU, isNaN(f) ? 0 : f);
     })
     return 0;
 }
-function generateShader(shader: string, uniforms: Uniform[], equation: string, symbol: string) {
-    shader = shader.replace(/#{{equation}}/g, equation);
-    shader = shader.replace(/#{{symbol}}/g, symbol);
-    shader = shader.replace(/#{{uniforms}}/g, uniforms.map(u => `uniform float ${u.name};`).join(''))
+function generateShader(shader: string, uniforms: Map<string, string>, equations: string[], symbol: string, system: 'cartesian' | 'polar') {
+    shader = shader.replace(/#{{equations}}/, equations.map((v, i) => `float fn${i} = ${v};`).join('\n'));
+    shader = shader.replace(/#{{fnVals}}/, equations.map((v, i) => `float fnVal${i} = aastep(0.02, pow(fn${i} #{{symbol}} ${system === "cartesian" ? 'y' : 'r'}, 2.0));`).join('\n'));
+    shader = shader.replaceAll(/#{{finals}}/g, equations.map((_, i) => `fnVal${i}`).join(' * '));
+    shader = shader.replaceAll(/#{{symbol}}/g, symbol);
+    shader = shader.replace(/#{{uniforms}}/g, [...uniforms.entries()].map(([n, v]) => `uniform float ${n};`).join('\n'))
     return shader;
 }
 
 export default function Graph() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const rawEquation = useRecoilValue(equationAtom);
+    const rawEquations = useRecoilValue(equationAtom);
     const settings = useRecoilValue(settingsAtom);
     const [rawUniforms, setRawUniforms] = useRecoilState(uniformsAtom);
     useEffect(() => {
@@ -190,7 +198,7 @@ export default function Graph() {
             }
 
             // Init shaders
-            const uniforms: Uniform[] = [];
+            const uniforms: Map<string, string> = new Map();
             const reserved = [
                 'pi',
                 'time',
@@ -203,27 +211,31 @@ export default function Graph() {
             ]
             const fns: string[] = [];
             const mathjs = create(all);
-            const eq = mathjs.parse(rawEquation);
-            eq.traverse((n, _, _p) => {
-                if (n.type === "FunctionNode") {
-                    const f = (n as FunctionNode);
-                    fns.push(f.fn.name);
-                    return;
-                }
-                if (n.type === "SymbolNode") {
-                    console.log(n);
-                    const s = (n as SymbolNode);
-                    if (!(reserved.includes(s.name) || uniforms.includes({ name: s.name, value: "0" }) || fns.includes(s.name))) {
-                        uniforms.push({ name: s.name, value: rawUniforms.find(u => u.name === s.name)?.value ?? "0" });
+            const equations = rawEquations.filter((e) => e).map((v, i) => {
+                const eq = mathjs.parse(v);
+                eq.traverse((n, _, _p) => {
+                    if (n.type === "FunctionNode") {
+                        const f = (n as FunctionNode);
+                        fns.push(f.fn.name);
+                        return;
                     }
-                }
-            })
+                    if (n.type === "SymbolNode") {
+                        console.log(n);
+                        const s = (n as SymbolNode);
+                        if (!(reserved.includes(s.name) || uniforms.has(s.name) || fns.includes(s.name))) {
+                            uniforms.set(s.name, rawUniforms.get(s.name) ?? "0");
+                        }
+                    }
+                })
+                const equation = mathjs.format(mathjs.simplify(eq, ['n1^n2 -> pow(n1,n2)', `pi -> ${Math.PI}`]), { notation: "fixed", precision: 10 });
+                return equation;
+            });
             console.log(uniforms, fns);
-            if (JSON.stringify(uniforms) !== JSON.stringify(rawUniforms)) {
+            if (JSON.stringify([...uniforms]) !== JSON.stringify([...rawUniforms])) {
                 setRawUniforms(uniforms);
             }
-            const equation = mathjs.format(mathjs.simplify(eq, ['n1^n2 -> pow(n1,n2)', `pi -> ${Math.PI}`]), { notation: "fixed", precision: 10 });
-            const fs = generateShader(settings.system === 'cartesian' ? fsCartesian : fsPolar, uniforms, equation, settings.symbol);
+            const fs = generateShader(rawFs, uniforms, equations, settings.symbol, settings.system);
+            console.log(fs);
             const program = initShaders(gl, vs, fs);
 
             if (!program) {
@@ -264,7 +276,7 @@ export default function Graph() {
             return;
         }
         return () => { cancelDraw = true; }
-    }, [rawEquation, rawUniforms, settings]);
+    }, [rawEquations, rawUniforms, settings]);
     return (
         <main className="w-full h-full bg-blue-200 text-xl grid place-items-center">
             <canvas ref={canvasRef} className="w-full h-full" width={width} height={height} />
